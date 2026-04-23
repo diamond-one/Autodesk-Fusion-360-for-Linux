@@ -76,6 +76,16 @@ QT6_WEBENGINECORE_URL="$REPO_URL/files/extras/patched-dlls/Qt6WebEngineCore-06-2
 # URL to download the patched siappdll.dll file
 SIAPPDLL_URL="$REPO_URL/files/extras/patched-dlls/siappdll.dll"
 
+# Detect Proton-GE
+PROTON_DIR=$(find "$HOME/.local/share/Steam/compatibilitytools.d" -maxdepth 1 -type d -name "GE-Proton*" 2>/dev/null | sort -V | tail -n 1)
+
+if [ -z "$PROTON_DIR" ]; then
+    echo "ERROR: Proton-GE not found"
+    exit 1
+fi
+
+PROTON_BIN="$PROTON_DIR/proton"
+
 ##############################################################################################################################################################################
 # CHECK THE REQUIRED PACKAGES FOR THE INSTALLER:                                                                                                                             #
 ##############################################################################################################################################################################
@@ -729,7 +739,7 @@ download_files() {
     download_file "adskidmgr-opener.desktop" "$REPO_URL/files/setup/resource/.desktop/adskidmgr-opener.desktop" "$SELECTED_DIRECTORY/.desktop"
 
     # Download some script files for Autodesk Fusion 360!
-    download_file "autodesk_fusion_launcher.sh" "$REPO_URL/files/setup/data/autodesk_fusion_launcher.sh" "$SELECTED_DIRECTORY/bin"
+    cp "$(dirname "$0")/data/autodesk_fusion_launcher.sh" "$SELECTED_DIRECTORY/bin/"
     chmod +x "$SELECTED_DIRECTORY/bin/autodesk_fusion_launcher.sh"
 }
 
