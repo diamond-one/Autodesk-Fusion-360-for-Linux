@@ -38,7 +38,7 @@ if [ "$SELECTED_EXTENSIONS" == "--full" ]; then
     DOWNLOAD_EXTENSIONS=1
 fi
 
-REPO_URL="https://codeberg.org/cryinkfly/Autodesk-Fusion-360-on-Linux/raw/branch/main"
+REPO_URL="https://raw.githubusercontent.com/diamond-one/Autodesk-Fusion-360-for-Linux/main"
 
 # URL to download translations po. files <-- Still in progress!!!
 UPDATER_TRANSLATIONS_URL="$REPO_URL/files/setup/locale/update-locale.sh"
@@ -80,11 +80,16 @@ SIAPPDLL_URL="$REPO_URL/files/extras/patched-dlls/siappdll.dll"
 PROTON_DIR=$(find "$HOME/.local/share/Steam/compatibilitytools.d" -maxdepth 1 -type d -name "GE-Proton*" 2>/dev/null | sort -V | tail -n 1)
 
 if [ -z "$PROTON_DIR" ]; then
-    echo "ERROR: Proton-GE not found"
+    echo -e "${RED}ERROR: Proton-GE not found in ~/.local/share/Steam/compatibilitytools.d${NOCOLOR}"
+    echo -e "${YELLOW}Install Proton-GE (GE-Proton) and restart installer.${NOCOLOR}"
     exit 1
 fi
 
 PROTON_BIN="$PROTON_DIR/proton"
+
+run_wine() {
+    (cd "$WINE_PFX/drive_c" && run_wine wine "$@")
+}
 
 ##############################################################################################################################################################################
 # CHECK THE REQUIRED PACKAGES FOR THE INSTALLER:                                                                                                                             #
@@ -155,18 +160,15 @@ check_required_packages() {
                         echo -e "${GREEN}The required command (${cmd}) is available!${NOCOLOR}"
                     fi
                     ;;
-
                 mokutil)
                     if ! command -v mokutil >/dev/null 2>&1; then
-                        echo -e "${RED}The required command (${cmd}) is not available!${NOCOLOR}"
-                        MISSING_COMMANDS+=("$cmd")
+                        echo -e "${YELLOW}mokutil is not installed (optional). Secure Boot checks will be skipped.${NOCOLOR}"
                     else
                         echo -e "${GREEN}The required command (${cmd}) is available!${NOCOLOR}"
                     fi
                     ;;
-                *)
-                    echo -e "${GREEN}The required command (${cmd}) is available!${NOCOLOR}"
-                    ;;
+
+
             esac
         else
             echo -e "${RED}The required command (${cmd}) is not available!${NOCOLOR}"
@@ -386,11 +388,26 @@ check_option() {
             autodesk_fusion_shortcuts_load
             autodesk_fusion_safe_logfile
             reset_window_not_responding_dialog
-            xdg-open "https://cryinkfly.com/sponsors/"
+#            xdg-open "https://codeberg.org/cryinkfly"
+            # ---- DXVK optional step (SAFE) ----
+            if command -v vulkaninfo >/dev/null 2>&1; then
+                read -p "Enable DXVK for better performance? (y/N): " enable_dxvk
+
+                if [[ "$enable_dxvk" =~ ^[Yy]$ ]]; then
+                    echo -e "${YELLOW}Installing DXVK...${NOCOLOR}"
+                    WINEPREFIX="$WINE_PFX" sh "$SELECTED_DIRECTORY/bin/winetricks" -q dxvk \
+                        >> "$SELECTED_DIRECTORY/logs/dxvk_install.log" 2>&1
+
+                    echo -e "${GREEN}DXVK installed successfully.${NOCOLOR}"
+                else
+                    echo -e "${GREEN}Skipping DXVK (using OpenGL).${NOCOLOR}"
+                fi
+            else
+                echo -e "${YELLOW}Vulkan not detected — skipping DXVK.${NOCOLOR}"
+            fi
+            # ---- END DXVK ----
+
             run_wine_autodesk_fusion
-            exit;;
-        *)
-            echo -e "$(gettext "${RED}Invalid option! Please use the --install or --uninstall flag!")${NOCOLOR}";
             exit;;
     esac
 }
@@ -429,11 +446,11 @@ create_data_structure() {
 # Function to check if Secure Boot is activated
 check_secure_boot() {
     if ! command -v mokutil &> /dev/null; then
-        echo "${RED} mokutil command not found. Please install it to check Secure Boot status.${NOCOLOR}"
-        exit 1
+        echo "${YELLOW}mokutil not installed. Skipping Secure Boot check.${NOCOLOR}"
+        SECURE_BOOT=0
+        return
     fi
 
-    # Check if Secure Boot is enabled
     if mokutil --sb-state | grep -qE 'Secure Boot enabled|SecureBoot enabled'; then
         echo "Secure Boot is enabled."
         SECURE_BOOT=1
@@ -442,7 +459,6 @@ check_secure_boot() {
         SECURE_BOOT=0
     fi
 }
-
 ##############################################################################################################################################################################
 # CHECKING THE MINIMUM RAM (RANDOM ACCESS MEMORY) REQUIREMENT:                                                                                                               #
 ##############################################################################################################################################################################
@@ -482,9 +498,8 @@ check_ram() {
 
 check_gpu_driver() {
     echo -e "$(gettext "${YELLOW}Checking the GPU drivers for the installer...${NOCOLOR}")"
-    
+
     if (( !SECURE_BOOT )); then
-        # If Secure Boot is disabled, check NVIDIA GPU
         if nvidia-smi &>/dev/null; then
             NVIDIA_PRESENT=1
             NVIDIA_VRAM=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits | head -n1)
@@ -498,77 +513,46 @@ check_gpu_driver() {
     if [[ $INTEL_AMD_GPU == "AMD" ]]; then
         AMD_PRESENT=1
         AMD_VRAM=$(glxinfo | grep -i "Video memory" | grep -Eo '[0-9]+MB' | grep -Eo '[0-9]+' | head -n1)
-        echo -e "$(gettext "${GREEN}${INTEL_AMD_GPU} GPU recognized with ${AMD_VRAM}MB VRAM${NOCOLOR}")"
+        echo -e "$(gettext "${GREEN}AMD GPU recognized with ${AMD_VRAM}MB VRAM${NOCOLOR}")"
     elif [[ $INTEL_AMD_GPU == "Intel" ]]; then
         INTEL_PRESENT=1
         INTEL_VRAM=$(glxinfo | grep -i "Video memory" | grep -Eo '[0-9]+MB' | grep -Eo '[0-9]+' | head -n1)
-        echo -e "$(gettext "${GREEN}${INTEL_AMD_GPU} GPU recognized with ${INTEL_VRAM}MB VRAM${NOCOLOR}")"
+        echo -e "$(gettext "${GREEN}Intel GPU recognized with ${INTEL_VRAM}MB VRAM${NOCOLOR}")"
     fi
 
     if (( SECURE_BOOT && NVIDIA_PRESENT )); then
-        # If Secure Boot is enabled and the NVIDIA GPU is detected, the NVIDIA GPU should use OpenGL.
         GPU_DRIVER="OpenGL"
         GET_VRAM_MEGABYTES="$NVIDIA_VRAM"
-        echo -e "$(gettext "${GREEN}Secure Boot is enabled. The OpenGL GPU driver is being used for the NVIDIA GPU.${NOCOLOR}")"
-    #elif (( !SECURE_BOOT )); then # WHY????
-    else 
-        echo -e "$(gettext "${GREEN}Secure Boot is disabled. Checking available GPU drivers...${NOCOLOR}")"
-        # If Secure Boot is disabled, handle GPU selection
-        if (( NVIDIA_PRESENT && (INTEL_PRESENT || AMD_PRESENT) )); then
-            echo -e "$(gettext "${YELLOW}Multiple GPUs detected. Please select which one to use (default is DXVK):${NOCOLOR}")"
-            echo "1) NVIDIA"
-            echo "2) ${INTEL_AMD_GPU}"
-            read -p "Enter your choice (1 or 2): " gpu_choice
-            
-            case $gpu_choice in
-                1)
-                    GPU_DRIVER="DXVK"
-                    GET_VRAM_MEGABYTES="$NVIDIA_VRAM"
-                    echo -e "$(gettext "${GREEN}NVIDIA GPU selected. The DXVK GPU driver will be used for installation.${NOCOLOR}")"
-                    ;;
-                2)
-                    GPU_DRIVER="OpenGL"
-                    GET_VRAM_MEGABYTES="$INTEL_AMD_VRAM"
-                    echo -e "$(gettext "${GREEN}The OpenGL GPU fallback driver is used for the installation.${NOCOLOR}")"
-                    ;;
-                *)
-                    GPU_DRIVER="OpenGL"
-                    GET_VRAM_MEGABYTES="$INTEL_VRAM"
-                    ;;
-            esac
-        elif (( NVIDIA_PRESENT )); then
-            GPU_DRIVER="DXVK"
+        echo -e "$(gettext "${GREEN}Secure Boot is enabled. Using OpenGL for NVIDIA.${NOCOLOR}")"
+    else
+        echo -e "$(gettext "${GREEN}Secure Boot is disabled. Selecting safe GPU driver...${NOCOLOR}")"
+
+        # FORCE SAFE MODE (no DXVK during install)
+        GPU_DRIVER="OpenGL"
+
+        if (( NVIDIA_PRESENT )); then
             GET_VRAM_MEGABYTES="$NVIDIA_VRAM"
-            echo -e "$(gettext "${GREEN}The DXVK GPU driver is used for the installation.${NOCOLOR}")"
         elif (( AMD_PRESENT )); then
-            GPU_DRIVER="DXVK"
             GET_VRAM_MEGABYTES="$AMD_VRAM"
-            echo -e "$(gettext "${GREEN}The DXVK GPU driver is used for the installation.${NOCOLOR}")"
         elif (( INTEL_PRESENT )); then
-            GPU_DRIVER="OpenGL"
             GET_VRAM_MEGABYTES="$INTEL_VRAM"
-            echo -e "$(gettext "${GREEN}The OpenGL GPU fallback driver is used for the installation.${NOCOLOR}")"
         else
-            echo -e "$(gettext "${RED}No GPU driver detected on your system!${NOCOLOR}")"
+            echo -e "$(gettext "${RED}No GPU detected!${NOCOLOR}")"
             GET_VRAM_MEGABYTES=0
         fi
-    #else
-    #    echo -e "$(gettext "${RED}No GPU driver detected on your system!${NOCOLOR}")"
-    #    GET_VRAM_MEGABYTES=0
+
+        echo -e "$(gettext "${GREEN}Using OpenGL (safe mode) for installation.${NOCOLOR}")"
     fi
 
     sleep 2
 
-    # Get the current display resolution of the main monitor if more than one is connected.
     MONITOR_RESOLUTION=$(xrandr 2>/dev/null | grep 'primary' | awk '{print $4}' | cut -d'+' -f1)
 
-    # If the $MONITOR_RESOLUTION value is empty, set it to "1920x1080"
     if [ -z "$MONITOR_RESOLUTION" ]; then
         MONITOR_RESOLUTION="1920x1080"
     fi
 
-    # Output the resolution
-    echo -e "$(gettext "${GREEN}Main monitor resolution: $MONITOR_RESOLUTION ${NOCOLOR}")"
+    echo -e "$(gettext "${GREEN}Main monitor resolution: $MONITOR_RESOLUTION${NOCOLOR}")"
 
     sleep 2
 }
@@ -701,341 +685,137 @@ Pin-Priority: 1000
 ##############################################################################################################################################################################
 # DOWNLOAD THE REQUIRED FILES FOR THE INSTALLER:                                                                                                                             #
 ##############################################################################################################################################################################
-
 download_files() {
     echo -e "$(gettext "${GREEN}Downloading the required files for the installation ...${NOCOLOR}")"
     sleep 2
-    # Download the newest winetricks version:
+
+    # Ensure base directories exist
+    mkdir -p "$SELECTED_DIRECTORY/bin"
+    mkdir -p "$SELECTED_DIRECTORY/downloads"
+    mkdir -p "$SELECTED_DIRECTORY/resources/graphics"
+    mkdir -p "$SELECTED_DIRECTORY/.desktop"
+
+    # Download winetricks
     download_file "winetricks" "$WINETRICKS_URL" "$SELECTED_DIRECTORY/bin"
     chmod +x "$SELECTED_DIRECTORY/bin/winetricks"
 
-    # Search for an existing installer of Autodesk Fusion and download it if it doesn't exist or is older than 7 days
+    # Download Autodesk Fusion installer
     download_file "FusionClientInstaller.exe" "$AUTODESK_FUSION_INSTALLER_URL"
 
-    # Search for an existing installer of WEBVIEW2 and download it if it doesn't exist or is older than 7 days
+    # Download WebView2
     download_file "WebView2installer.exe" "$WEBVIEW2_INSTALLER_URL"
- 
-    # Download all tested extensions for Autodesk Fusion 360 on Linux
+
+    # Optional extensions
     if (( DOWNLOAD_EXTENSIONS )); then
         download_extensions_files
     fi
 
-    # Download the patched Qt6WebEngineCore.dll file
+    # Download patched DLLs
     download_file "Qt6WebEngineCore.dll.7z" "$QT6_WEBENGINECORE_URL"
-
-    # Download the patched siappdll.dll file
     download_file "siappdll.dll" "$SIAPPDLL_URL"
 
+    # GPU-specific files (local)
     mkdir -p "$SELECTED_DIRECTORY/downloads/$GPU_DRIVER"
-    # Download the DXVK registry file if the DXVK GPU driver is selected
+
     if [[ $GPU_DRIVER == "DXVK" ]]; then
-        download_file "DXVK.reg" "$REPO_URL/files/setup/resource/video_driver/DXVK/DXVK.reg" "$SELECTED_DIRECTORY/downloads/DXVK"
+        cp "files/setup/resource/video_driver/DXVK/DXVK.reg" \
+           "$SELECTED_DIRECTORY/downloads/DXVK/" 2>/dev/null || true
     fi
-    download_file "NMachineSpecificOptions.xml" "$REPO_URL/files/setup/resource/video_driver/$GPU_DRIVER/NMachineSpecificOptions.xml" "$SELECTED_DIRECTORY/downloads/$GPU_DRIVER"
 
-    # Download Autodesk Fusion SVG!
-    download_file "autodesk_fusion.svg" "$REPO_URL/files/setup/resource/graphics/autodesk_fusion.svg" "$SELECTED_DIRECTORY/resources/graphics"
-    download_file "Autodesk Fusion.desktop" "$REPO_URL/files/setup/resource/.desktop/Autodesk%20Fusion.desktop" "$SELECTED_DIRECTORY/.desktop"
-    download_file "adskidmgr-opener.desktop" "$REPO_URL/files/setup/resource/.desktop/adskidmgr-opener.desktop" "$SELECTED_DIRECTORY/.desktop"
+    cp "files/setup/resource/video_driver/$GPU_DRIVER/NMachineSpecificOptions.xml" \
+       "$SELECTED_DIRECTORY/downloads/$GPU_DRIVER/" 2>/dev/null || true
 
-    # Download some script files for Autodesk Fusion 360!
+    # Assets (local)
+    cp "files/setup/resource/graphics/autodesk_fusion.svg" \
+       "$SELECTED_DIRECTORY/resources/graphics/" 2>/dev/null || true
+
+    cp "files/setup/resource/.desktop/Autodesk Fusion.desktop" \
+       "$SELECTED_DIRECTORY/.desktop/" 2>/dev/null || true
+
+    cp "files/setup/resource/.desktop/adskidmgr-opener.desktop" \
+       "$SELECTED_DIRECTORY/.desktop/" 2>/dev/null || true
+
+    # Launcher script (local)
     cp "$(dirname "$0")/data/autodesk_fusion_launcher.sh" "$SELECTED_DIRECTORY/bin/"
     chmod +x "$SELECTED_DIRECTORY/bin/autodesk_fusion_launcher.sh"
 }
 
+
 download_extensions_files() {
     echo -e "$(gettext "${YELLOW}Downloading the tested extensions for Autodesk Fusion on Linux ...${NOCOLOR}")"
+
     EXTENSION_FILE_DIRECTORY="$SELECTED_DIRECTORY/downloads/extensions"
+    mkdir -p "$EXTENSION_FILE_DIRECTORY"
+
     download_file "Ceska_lokalizace_pro_Autodesk_Fusion.exe" \
         "https://www.cadstudio.cz/dl/Ceska_lokalizace_pro_Autodesk_Fusion_360.exe" \
         "$EXTENSION_FILE_DIRECTORY"
+
     download_file "HP_3DPrinters_for_Fusion360-win64.msi" \
         "https://github.com/cryinkfly/Autodesk-Fusion-360-for-Linux/raw/main/files/extensions/HP_3DPrinters_for_Fusion360-win64.msi" \
         "$EXTENSION_FILE_DIRECTORY"
+
     download_file "Markforged_for_Fusion360-win64.msi" \
         "https://github.com/cryinkfly/Autodesk-Fusion-360-for-Linux/raw/main/files/extensions/Markforged_for_Fusion360-win64.msi" \
         "$EXTENSION_FILE_DIRECTORY"
+
     download_file "OctoPrint_for_Fusion360-win64.msi" \
         "https://github.com/cryinkfly/Autodesk-Fusion-360-for-Linux/raw/main/files/extensions/OctoPrint_for_Fusion360-win64.msi" \
         "$EXTENSION_FILE_DIRECTORY"
+
     download_file "Ultimaker_Digital_Factory-win64.msi" \
         "https://github.com/cryinkfly/Autodesk-Fusion-360-for-Linux/raw/main/files/extensions/Ultimaker_Digital_Factory-win64.msi" \
         "$EXTENSION_FILE_DIRECTORY"
+
     echo -e "$(gettext "${GREEN}All tested extensions for Autodesk Fusion on Linux are downloaded!${NOCOLOR}")"
 }
+
 
 download_file() {
     local FILE_NAME="$1"
     local FILE_URL="$2"
-    local DESTINATION_DIRECTORY="${3:-$SELECTED_DIRECTORY/downloads/}"
+    local DESTINATION_DIRECTORY="${3:-$SELECTED_DIRECTORY/downloads}"
     local FILE="$DESTINATION_DIRECTORY/$FILE_NAME"
+
+    mkdir -p "$DESTINATION_DIRECTORY"
 
     if [ -f "$FILE" ]; then
         echo -e "$(gettext "${GREEN}$FILE_NAME exists!${NOCOLOR}")"
+
         if find "$FILE" -mtime +7 | grep -q .; then
-            echo -e "$(gettext "${YELLOW}$FILE_NAME exists but is older than 7 days and will be updated!")${NOCOLOR}"
-            rm -rf "$FILE"
-            curl -L "$FILE_URL" -o "$FILE"
+            echo -e "$(gettext "${YELLOW}$FILE_NAME outdated → re-downloading${NOCOLOR}")"
+            rm -f "$FILE"
+            curl -fL "$FILE_URL" -o "$FILE" || {
+                echo -e "${RED}Failed to download $FILE_NAME${NOCOLOR}"
+                return 1
+            }
         fi
     else
-        echo -e "$(gettext "${YELLOW}$FILE_NAME doesn't exist and will be downloaded for you!${NOCOLOR}")"
-        curl -L "$FILE_URL" -o "$FILE"
+        echo -e "$(gettext "${YELLOW}$FILE_NAME downloading...${NOCOLOR}")"
+        curl -fL "$FILE_URL" -o "$FILE" || {
+            echo -e "${RED}Failed to download $FILE_NAME${NOCOLOR}"
+            return 1
+        }
     fi
-    
 }
-
 ##############################################################################################################################################################################
 # CHECK AND INSTALL WINE FOR THE INSTALLER:                                                                                                                                  #
 ##############################################################################################################################################################################
 
 check_and_install_wine() {
-    # Check if wine is installed
-    if [ -x "$(command -v wine)" ]; then
-        echo "Wine is installed!"
-        WINE_VERSION="$(wine --version  | cut -d ' ' -f1 | sed -e 's/wine-//' -e 's/-rc.*//')"
-        WINE_VERSION_MAJOR_RELEASE="$(echo $WINE_VERSION | cut -d '.' -f1)"
-        WINE_VERSION_MINOR_RELEASE="$(echo $WINE_VERSION | cut -d '.' -f2)"
-        
-        # Check if the installed wine version is at least 9.8 or higher (wine_version_series and wine_version_series_release)
-        if [ "$WINE_VERSION_MAJOR_RELEASE" -gt 9 ] || ([ "$WINE_VERSION_MAJOR_RELEASE" -eq 9 ] && [ "$WINE_VERSION_MINOR_RELEASE" -ge 8 ]); then
-            echo "Wine version $WINE_VERSION is installed!"
-            WINE_STATUS=1
-        else
-            echo "Wine version $WINE_VERSION is installed, but this version is too old and will be updated for you!"
-            WINE_STATUS=0
-        fi
-
-    else
-        echo "Wine is not installed on your system and will be installed for you!"
-        WINE_STATUS=0
+    if ! command -v wine >/dev/null 2>&1; then
+        echo -e "${RED}Wine is not installed!${NOCOLOR}"
+        echo ""
+        echo "Please install Wine manually:"
+        echo "Ubuntu / PopOS:"
+        echo "  sudo dpkg --add-architecture i386"
+        echo "  sudo apt update"
+        echo "  sudo apt install wine64 wine32 -y"
+        echo ""
+        exit 1
     fi
 
-    # Check wine status 0 and install Wine version 
-    if [ "$WINE_STATUS" -eq 0 ]; then
-        DISTRO_VERSION=$(lsb_release -ds) # Check which Linux Distro is used! <-- Still in progress!!!
-        if [[ $DISTRO_VERSION == *"Arch"*"Linux"* ]] || [[ $DISTRO_VERSION == *"Manjaro"*"Linux"* ]] || [[ $DISTRO_VERSION == *"EndeavourOS"* ]] || [[ $DISTRO_VERSION == *"CachyOS"* ]]; then
-            echo "Installing Wine for Arch Linux ..."
-            if grep -q '^\[multilib\]$' /etc/pacman.conf; then
-                echo "Multilib is already enabled!"
-                pkexec bash -c '
-                    pacman -R wine wine-mono wine_gecko winetricks --noconfirm
-                    pacman -Syu --needed wine wine-mono wine_gecko winetricks'
-            else
-                echo "Enabling Multilib ..."
-                pkexec sh -c '
-                    echo -e "[multilib]\nInclude = /etc/pacman.d/mirrorlist" >> /etc/pacman.conf
-                    pacman -R wine wine-mono wine_gecko winetricks --noconfirm
-                    pacman -Syu --needed wine wine-mono wine_gecko winetricks'
-            fi
-        elif [[ $DISTRO_VERSION == *"Debian"*"12"* ]]; then
-            echo "Installing Wine for Debian 12 ..."
-            pkexec bash -c '
-                apt-get --allow-releaseinfo-change update
-                dpkg --add-architecture i386
-                rm /etc/apt/sources.list.d/wine* /etc/apt/sources.list.d/*wine* 2>/dev/null
-                apt-key list | grep -A 2 "wine" | grep "pub" | awk "{print \$2}" | cut -d"/" -f2 | xargs -r apt-key del
-                mkdir -pm755 /etc/apt/keyrings
-                wget -O /etc/apt/keyrings/winehq-archive.key https://dl.winehq.org/wine-builds/winehq.key
-                wget -NP /etc/apt/sources.list.d/ https://dl.winehq.org/wine-builds/debian/dists/bookworm/winehq-bookworm.sources
-                apt-get update
-                apt-get remove wine* --purge
-                apt-get autoremove -y
-                apt-get install -y --install-recommends winehq-staging'
-        elif [[ $DISTRO_VERSION == *"Debian"*"13"* ]]; then
-            echo "Installing Wine for Debian 13 ..."
-            pkexec bash -c '
-                apt-get --allow-releaseinfo-change update
-                dpkg --add-architecture i386
-                rm /etc/apt/sources.list.d/wine* /etc/apt/sources.list.d/*wine* 2>/dev/null
-                apt-key list | grep -A 2 "wine" | grep "pub" | awk "{print \$2}" | cut -d"/" -f2 | xargs -r apt-key del
-                mkdir -pm755 /etc/apt/keyrings
-                wget -O /etc/apt/keyrings/winehq-archive.key https://dl.winehq.org/wine-builds/winehq.key
-                wget -NP /etc/apt/sources.list.d/ https://dl.winehq.org/wine-builds/debian/dists/trixie/winehq-trixie.sources
-                apt-get update
-                apt-get remove wine* --purge
-                apt-get autoremove -y
-                apt-get install -y --install-recommends winehq-staging'
-        elif [[ $DISTRO_VERSION == *"Debian"*"Testing"* ]] || [[ $DISTRO_VERSION == *"Debian"*"testing"* ]]; then
-            echo "Installing Wine for Debian testing ..."
-            pkexec bash -c '
-                apt-get --allow-releaseinfo-change update
-                dpkg --add-architecture i386
-                rm /etc/apt/sources.list.d/wine* /etc/apt/sources.list.d/*wine* 2>/dev/null
-                apt-key list | grep -A 2 "wine" | grep "pub" | awk "{print \$2}" | cut -d"/" -f2 | xargs -r apt-key del
-                mkdir -pm755 /etc/apt/keyrings
-                wget -O /etc/apt/keyrings/winehq-archive.key https://dl.winehq.org/wine-builds/winehq.key
-                wget -NP /etc/apt/sources.list.d/ https://dl.winehq.org/wine-builds/debian/dists/trixie/winehq-trixie.sources
-                apt-get update
-                apt-get remove wine* --purge
-                apt-get autoremove -y
-                apt-get install -y --install-recommends winehq-staging'
-        elif [[ $DISTRO_VERSION == *"Ubuntu"*"20.04"* ]] || [[ $DISTRO_VERSION == *"Linux"*"Mint"*"20"* ]] || [[ $DISTRO_VERSION == *"Pop"*"OS"*"20.04"* ]] || [[ $DISTRO_VERSION == *"pop"*"20.04"* ]]; then
-            echo "Installing Wine for Ubuntu 20.04 ..."
-            pkexec bash -c '
-                dpkg --add-architecture i386
-                rm /etc/apt/sources.list.d/wine* /etc/apt/sources.list.d/*wine* 2>/dev/null
-                apt-key list | grep -A 2 "wine" | grep "pub" | awk "{print \$2}" | cut -d"/" -f2 | xargs -r apt-key del
-                mkdir -pm755 /etc/apt/keyrings
-                wget -O /etc/apt/keyrings/winehq-archive.key https://dl.winehq.org/wine-builds/winehq.key
-                wget -NP /etc/apt/sources.list.d/ https://dl.winehq.org/wine-builds/ubuntu/dists/focal/winehq-focal.sources
-                apt-get update
-                apt-get remove wine* --purge
-                apt-get autoremove -y
-                apt-get install -y --install-recommends winehq-staging'
-        elif [[ $DISTRO_VERSION == *"Ubuntu"*"22.04"* ]] || [[ $DISTRO_VERSION == *"Linux"*"Mint"*"21"* ]] || [[ $DISTRO_VERSION == *"Pop"*"22.04"* ]]; then
-            echo "Installing Wine for Ubuntu 22.04 ..."
-            pkexec bash -c '
-                dpkg --add-architecture i386
-                rm /etc/apt/sources.list.d/wine* /etc/apt/sources.list.d/*wine* 2>/dev/null
-                apt-key list | grep -A 2 "wine" | grep "pub" | awk "{print \$2}" | cut -d"/" -f2 | xargs -r apt-key del
-                mkdir -pm755 /etc/apt/keyrings
-                wget -O /etc/apt/keyrings/winehq-archive.key https://dl.winehq.org/wine-builds/winehq.key
-                wget -NP /etc/apt/sources.list.d/ https://dl.winehq.org/wine-builds/ubuntu/dists/jammy/winehq-jammy.sources
-                apt-get update
-                apt-get remove wine* --purge
-                apt-get autoremove -y
-                apt-get install -y --install-recommends winehq-staging'
-        elif [[ $DISTRO_VERSION == *"Ubuntu"*"24.04"* ]] || [[ $DISTRO_VERSION == *"Linux"*"Mint"*"22"* ]] || [[ $DISTRO_VERSION == *"Pop"*"24.04"* ]]; then
-            echo "Installing Wine for Ubuntu 24.04 ..."
-            pkexec bash -c '
-                dpkg --add-architecture i386
-                rm /etc/apt/sources.list.d/wine* /etc/apt/sources.list.d/*wine* 2>/dev/null
-                apt-key list | grep -A 2 "wine" | grep "pub" | awk "{print \$2}" | cut -d"/" -f2 | xargs -r apt-key del
-                mkdir -pm755 /etc/apt/keyrings
-                wget -O /etc/apt/keyrings/winehq-archive.key https://dl.winehq.org/wine-builds/winehq.key
-                wget -NP /etc/apt/sources.list.d/ https://dl.winehq.org/wine-builds/ubuntu/dists/noble/winehq-noble.sources
-                apt-get update
-                apt-get remove wine* --purge
-                apt-get autoremove -y
-                apt-get install -y --install-recommends winehq-staging'
-        elif [[ $DISTRO_VERSION == *"Ubuntu"*"25.04"* ]]; then
-            echo "Installing Wine for Ubuntu 25.04 ..."
-            pkexec bash -c '
-                dpkg --add-architecture i386
-                rm /etc/apt/sources.list.d/wine* /etc/apt/sources.list.d/*wine* 2>/dev/null
-                apt-key list | grep -A 2 "wine" | grep "pub" | awk "{print \$2}" | cut -d"/" -f2 | xargs -r apt-key del
-                mkdir -pm755 /etc/apt/keyrings
-                wget -O /etc/apt/keyrings/winehq-archive.key https://dl.winehq.org/wine-builds/winehq.key
-                wget -NP /etc/apt/sources.list.d/ https://dl.winehq.org/wine-builds/ubuntu/dists/plucky/winehq-plucky.sources
-                apt-get update
-                apt-get remove wine* --purge
-                apt-get autoremove -y
-                apt-get install -y --install-recommends winehq-staging'
-        elif [[ $DISTRO_VERSION == *"Fedora"* && $DISTRO_VERSION == *"43"* ]] || [[ $DISTRO_VERSION == *"Nobara"* ]]; then
-            echo "Installing Wine for Fedora 43 ..."
-            echo -e "$(gettext "${YELLOW}Multiple Wine repos detected. Please choose which to use:${NOCOLOR}")"
-            echo "1) WineHQ Repository"
-            echo "2) openSUSE-Wine-OBS Repository"
-            read -p "Enter your choice (1 or 2): " wine_repo_choice
-
-            case $wine_repo_choice in
-                1)
-                    echo -e "$(gettext "${GREEN}WineHQ Repository selected. The WineHQ Repository will be used for the installation.${NOCOLOR}")"
-                    pkexec bash -c '
-                        dnf config-manager --add-repo https://dl.winehq.org/wine-builds/fedora/43/winehq.repo
-                        dnf remove -y wine wine-*
-                        dnf install -y winehq-staging'
-                    ;;
-                2)
-                    echo -e "$(gettext "${GREEN}openSUSE-Wine-OBS Repository selected. The openSUSE-Wine-OBS Repository will be used for the installation.${NOCOLOR}")"
-                    pkexec bash -c '
-                        rpm --import https://download.opensuse.org/repositories/Emulators:/Wine:/Fedora/Fedora_43/repodata/repomd.xml.key
-                        dnf config-manager --add-repo https://download.opensuse.org/repositories/Emulators:/Wine:/Fedora/Fedora_43/
-                        dnf remove -y wine wine-*
-                        dnf install -y winehq-staging'
-                    ;;
-                *)
-                    echo -e "$(gettext "${RED}Invalid choice. The WineHQ Repository will be used for the installation.${NOCOLOR}")"
-                    pkexec bash -c '
-                        dnf config-manager --add-repo https://dl.winehq.org/wine-builds/fedora/43/winehq.repo
-                        dnf remove -y wine wine-*
-                        dnf install -y winehq-staging'
-                    ;;
-            esac
-        elif [[ $DISTRO_VERSION == *"Fedora"*"Rawhide"* ]]; then
-            echo "Installing Wine for Fedora rawhide ..."
-            pkexec bash -c '
-                dnf config-manager --add-repo https://download.opensuse.org/repositories/Emulators:/Wine:/Fedora/Fedora_Rawhide/
-                dnf remove wine wine-*
-                dnf install -y winehq-staging'
-        elif [[ $DISTRO_VERSION == *"Gentoo"* ]]; then
-            echo "Installing Wine for Gentoo ..."
-            pkexec emerge -av app-emulation/wine
-        elif [[ $DISTRO_VERSION == *"openSUSE"*"15.6"* ]]; then
-            echo "Installing Wine for openSUSE 15.6 ..."
-            pkexec bash -c '
-                repos=$(zypper repos --uri | grep wine | awk '{print $1}')
-                # Remove each identified repository
-                for repo in $repos; do
-                    echo "Removing repository: $repo"
-                    zypper removerepo "$repo"
-                done
-                zypper addrepo -cfp 90 "https://download.opensuse.org/repositories/Emulators:/Wine/15.6/" wine
-                zypper refresh
-                zypper remove wine wine-* winetricks --no-confirm
-                zypper install -y wine'
-        elif [[ $DISTRO_VERSION == *"openSUSE"*"16.0"* ]]; then
-            echo "Installing Wine for openSUSE 16.0 ..."
-            pkexec bash -c '
-                repos=$(zypper repos --uri | grep wine | awk '{print $1}')
-                # Remove each identified repository
-                for repo in $repos; do
-                    echo "Removing repository: $repo"
-                    zypper removerepo "$repo"
-                done
-                zypper addrepo -cfp 90 "https://download.opensuse.org/repositories/Emulators:/Wine/16.0/" wine
-                zypper refresh
-                zypper remove wine wine-* winetricks --no-confirm
-                zypper install -y wine'
-        elif [[ $DISTRO_VERSION == *"openSUSE"*"Tumbleweed"* ]]; then
-            echo "Installing Wine for openSUSE tumbleweed ..."
-            pkexec bash -c '
-                repos=$(zypper repos --uri | grep wine | awk '{print $1}')
-                # Remove each identified repository
-                for repo in $repos; do
-                    echo "Removing repository: $repo"
-                    zypper removerepo "$repo"
-                done
-                zypper addrepo -cfp 90 "https://download.opensuse.org/repositories/Emulators:/Wine/openSUSE_Tumbleweed/" wine
-                zypper refresh
-                zypper remove wine wine-* winetricks --no-confirm
-                zypper install -y wine'
-        elif [[ $DISTRO_VERSION == *"Red"*"Hat"*"Enterprise"*"Linux"* ]] || [[ $DISTRO_VERSION == *"Alma"*"Linux"* ]] || [[ $DISTRO_VERSION == *"Rocky"*"Linux"* ]]; then
-            echo "Installing Wine for RHEL 9, 10, ..."
-            if command -v dnf &> /dev/null; then # Use dnf for newer distributions
-                pkexec bash -c '
-                    dnf -y groupinstall 'Development Tools'
-                    dnf -y install gcc libX11-devel freetype-devel zlib-devel libxcb-devel libxslt-devel
-                    curl -L https://dl.winehq.org/wine/source/11.x/wine-11.1.tar.xz -o /tmp/wine-11.1.tar.xz
-                    tar -xvf /tmp/wine-11.1.tar.xz -C /tmp/
-                    ./tmp/wine-11.1/configure --enable-win64
-                    make -C /tmp/wine-11.1
-                    make -C /tmp/wine-11.1 install'
-            else  # Use yum for older distributions
-                pkexec bash -c '
-                    yum -y groupinstall 'Development Tools'
-                    yum install gcc libX11-devel freetype-devel zlib-devel libxcb-devel libxslt-devel
-                    curl -L https://dl.winehq.org/wine/source/11.x/wine-11.1.tar.xz -o /tmp/wine-11.1.tar.xz
-                    tar -xvf /tmp/wine-11.1.tar.xz -C /tmp/
-                    ./tmp/wine-11.1/configure --enable-win64
-                    make -C /tmp/wine-11.1
-                    make -C /tmp/wine-11.1 install'
-            fi
-        elif [[ $DISTRO_VERSION == *"Solus"* ]]; then
-            echo "Installing Wine for Solus ..."
-            pkexec eopkg install -y winehq-staging
-        elif [[ $DISTRO_VERSION == *"Void"* ]]; then
-            echo "Installing Wine for Void Linux ..."
-            pkexec xbps-install -Syu --yes wine
-        elif [[ $DISTRO_VERSION == *"NixOS"* ]] || [[ $DISTRO_VERSION == *"nixos"* ]]; then
-            echo "Installing Wine for NixOS ..."
-            pkexec nix-env -iA nixos.wine nixos.winetricks --yes
-        # Add more distributions and versions here ...
-        # elif ...
-        else
-            echo "Error: Your Linux distribution and version are not supported."
-        fi
-    fi
+    echo -e "${GREEN}Using system Wine: $(wine --version)${NOCOLOR}"
 }
 
 
@@ -1095,10 +875,10 @@ autodesk_fusion_shortcuts_load() {
 autodesk_fusion_run_install_client() {
     echo -e "$(gettext "${YELLOW}Installing Autodesk Fusion 360 Client ...${NOCOLOR}")"
     sleep 2
-    WINEPREFIX="$WINE_PFX" timeout -k 10m 9m wine "$SELECTED_DIRECTORY/downloads/FusionClientInstaller.exe" --quiet 2>> "$SELECTED_DIRECTORY/logs/FusionClientInstaller_1.log"
+    run_wine timeout -k 10m 9m wine "$SELECTED_DIRECTORY/downloads/FusionClientInstaller.exe" --quiet 2>> "$SELECTED_DIRECTORY/logs/FusionClientInstaller_1.log"
     sleep 5
     echo -e "$(gettext "${YELLOW}Finalizing Autodesk Fusion 360 installation...${NOCOLOR}")"
-    WINEPREFIX="$WINE_PFX" timeout -k 5m 1m wine "$SELECTED_DIRECTORY/downloads/FusionClientInstaller.exe" --quiet 2>> "$SELECTED_DIRECTORY/logs/FusionClientInstaller_2.log"
+    run_wine timeout -k 5m 1m wine "$SELECTED_DIRECTORY/downloads/FusionClientInstaller.exe" --quiet 2>> "$SELECTED_DIRECTORY/logs/FusionClientInstaller_2.log"
     echo -e "$(gettext "${GREEN}Autodesk Fusion 360 Client installation completed!${NOCOLOR}")"
 }
 
@@ -1137,6 +917,7 @@ autodesk_fusion_patch_qt6webenginecore() {
 # Add/Patch the siappdll.dll to fix the SpaceMouse issue
 
 autodesk_fusion_patch_siappdll() {
+    QT6_WEBENGINECORE_DIR=$(find "$WINE_PFX" -name 'Qt6WebEngineCore.dll' -printf "%h\n" | head -n 1)
     echo -e "${YELLOW}Patching the siappdll.dll file for Autodesk Fusion ...${NOCOLOR}"
     sleep 2
     
@@ -1158,73 +939,96 @@ autodesk_fusion_patch_siappdll() {
 
 # Wine configuration for Autodesk Fusion
 wine_autodesk_fusion_install() {
-    # Note that the winetricks sandbox verb merely removes the desktop integration and Z: drive symlinks and is not a "true" sandbox.
-    # It protects against errors rather than malice. It's useful for, e.g., keeping games from saving their settings in random subdirectories of your home directory.
-    # But it still ensures that wine, for example, no longer has access permissions to Home!
-    # For this reason, the EXE files must be located directly in the Wineprefix folder!
-
     echo -e "$(gettext "${YELLOW}Setting up the Wine prefix for Autodesk Fusion 360 in Sandbox... (suppressed)${NOCOLOR}")"
-    WINEPREFIX="$WINE_PFX" sh "$SELECTED_DIRECTORY/bin/winetricks" -q sandbox >> "$SELECTED_DIRECTORY/logs/winetricks_sandbox.log" 2>&1
+    run_wine sh "$SELECTED_DIRECTORY/bin/winetricks" -q sandbox >> "$SELECTED_DIRECTORY/logs/winetricks_sandbox.log" 2>&1
 
     echo -e "$(gettext "${YELLOW}Linking the downloads folder to the Wine prefix...${NOCOLOR}")"
-    rm -r "$WINE_PFX/drive_c/users/$USER/Downloads"
+    rm -rf "$WINE_PFX/drive_c/users/$USER/Downloads"
     ln -s "$SELECTED_DIRECTORY/downloads" "$WINE_PFX/drive_c/users/$USER/Downloads"
+
 
     echo -e "$(gettext "${YELLOW}Configuring the Wine prefix for Autodesk Fusion 360...${NOCOLOR}")"
     sleep 5
-    # If Mono or Gecko were not installed correctly in your Wine prefix:
-    WINEPREFIX="$WINE_PFX" wine control.exe appwiz.cpl install_mono
-    WINEPREFIX="$WINE_PFX" wine control.exe appwiz.cpl install_gecko
+
+    run_wine wine control.exe appwiz.cpl install_mono
+    run_wine wine control.exe appwiz.cpl install_gecko
     sleep 5
-    # We must install some packages!
-    WINEPREFIX="$WINE_PFX" sh "$SELECTED_DIRECTORY/bin/winetricks" -q atmlib gdiplus arial corefonts cjkfonts dotnet452 msxml4 msxml6 vcrun2017 fontsmooth=rgb winhttp win10 2>> "$SELECTED_DIRECTORY/logs/winetricks_dotnet452.log"
-    # We must install cjkfonts again then sometimes it doesn't work in the first time!
+
+    run_wine sh "$SELECTED_DIRECTORY/bin/winetricks" -q \
+        atmlib gdiplus arial corefonts cjkfonts dotnet452 msxml4 msxml6 \
+        vcrun2017 fontsmooth=rgb winhttp win10 \
+        >> "$SELECTED_DIRECTORY/logs/winetricks_dotnet452.log" 2>&1
+
     echo -e "$(gettext "${YELLOW}Re-installing cjkfonts... (suppressed)${NOCOLOR}")"
     sleep 5
-    WINEPREFIX="$WINE_PFX" sh "$SELECTED_DIRECTORY/bin/winetricks" -q cjkfonts >> "$SELECTED_DIRECTORY/logs/winetricks_cjkfonts_2.log" 2>&1
-    # We must set to Windows 10 or 11 again because some other winetricks sometimes set it back to Windows XP!
+    run_wine sh "$SELECTED_DIRECTORY/bin/winetricks" -q cjkfonts \
+        >> "$SELECTED_DIRECTORY/logs/winetricks_cjkfonts_2.log" 2>&1
+
     echo -e "$(gettext "${YELLOW}Setting Windows 11 as the Windows version... (suppressed)${NOCOLOR}")"
     sleep 5
-    WINEPREFIX="$WINE_PFX" sh "$SELECTED_DIRECTORY/bin/winetricks" -q win11 >> "$SELECTED_DIRECTORY/logs/winetricks_win11.log" 2>&1
-    # Remove tracking metrics/calling home
+    run_wine sh "$SELECTED_DIRECTORY/bin/winetricks" -q win11 \
+        >> "$SELECTED_DIRECTORY/logs/winetricks_win11.log" 2>&1
+
     sleep 5
-    WINEPREFIX="$WINE_PFX" wine REG ADD "HKCU\Software\Wine\DllOverrides" /v "adpclientservice.exe" /t REG_SZ /d "" /f
-    # Navigation bar does not work well with anything other than the wine builtin DX9
-    WINEPREFIX="$WINE_PFX" wine REG ADD "HKCU\Software\Wine\DllOverrides" /v "AdCefWebBrowser.exe" /t REG_SZ /d builtin /f
-    # Use Visual Studio Redist that is bundled with the application
-    WINEPREFIX="$WINE_PFX" wine REG ADD "HKCU\Software\Wine\DllOverrides" /v "msvcp140" /t REG_SZ /d native /f
-    WINEPREFIX="$WINE_PFX" wine REG ADD "HKCU\Software\Wine\DllOverrides" /v "mfc140u" /t REG_SZ /d native /f
-    # Fixed the problem with the bcp47langs issue and now the login works again!
-    WINEPREFIX="$WINE_PFX" wine reg add "HKCU\Software\Wine\DllOverrides" /v "bcp47langs" /t REG_SZ /d "" /f
+
+    run_wine wine REG ADD "HKCU\Software\Wine\DllOverrides" /v "adpclientservice.exe" /t REG_SZ /d "" /f
+    run_wine wine REG ADD "HKCU\Software\Wine\DllOverrides" /v "AdCefWebBrowser.exe" /t REG_SZ /d builtin /f
+    run_wine wine REG ADD "HKCU\Software\Wine\DllOverrides" /v "msvcp140" /t REG_SZ /d native /f
+    run_wine wine REG ADD "HKCU\Software\Wine\DllOverrides" /v "mfc140u" /t REG_SZ /d native /f
+    run_wine wine reg add "HKCU\Software\Wine\DllOverrides" /v "bcp47langs" /t REG_SZ /d "" /f
+
     sleep 5
-    # Install 7-Zip inside the Wine prefix via winetricks.
-    # This method does NOT require 7-Zip on the host system and is more stable/reliable than previous approaches.
-    WINEPREFIX="$WINE_PFX" sh "$SELECTED_DIRECTORY/bin/winetricks" -q 7zip >> "$SELECTED_DIRECTORY/logs/winetricks_7zip.log" 2>&1
-    WINEPREFIX="$WINE_PFX" wine "$WINE_PFX/drive_c/Program Files/7-Zip/7z.exe" x "C:\\users\\$USER\\Downloads\\Qt6WebEngineCore.dll.7z" -o"C:\\users\\$USER\\Downloads\\"
-    # Disabled by Default - Configure the correct virtual desktop resolution
-    # WINEPREFIX="$WINE_PFX" sh "$SELECTED_DIRECTORY/bin/winetricks" -q vd="$MONITOR_RESOLUTION"
-    # Download and install WebView2 to handle Login attempts, required even though we redirect to your default browser
-    echo -e "$(gettext "${YELLOW}Installing Microsoft Edge WebView2 Runtime for Autodesk Fusion ...${NOCOLOR}")"
+
+    echo -e "$(gettext "${YELLOW}Installing 7-Zip inside Wine prefix...${NOCOLOR}")"
+    run_wine sh "$SELECTED_DIRECTORY/bin/winetricks" -q 7zip \
+        >> "$SELECTED_DIRECTORY/logs/winetricks_7zip.log" 2>&1
+
+    echo -e "$(gettext "${YELLOW}Extracting Qt6WebEngineCore.dll...${NOCOLOR}")"
+    run_wine wine "$WINE_PFX/drive_c/Program Files/7-Zip/7z.exe" \
+        x "C:\\users\\$USER\\Downloads\\Qt6WebEngineCore.dll.7z" \
+        -o"C:\\users\\$USER\\Downloads\\" -y \
+        >> "$SELECTED_DIRECTORY/logs/7zip_extract.log" 2>&1
+
+    echo -e "$(gettext "${YELLOW}Installing Microsoft Edge WebView2 Runtime...${NOCOLOR}")"
     sleep 2
-    WINEPREFIX="$WINE_PFX" wine "$SELECTED_DIRECTORY/downloads/WebView2installer.exe" /silent /install 2>> "$SELECTED_DIRECTORY/logs/WebView2_install.log"
-    echo -e "$(gettext "${GREEN}Microsoft Edge WebView2 Runtime installation completed!${NOCOLOR}")"
-    # Pre-create shortcut directory for latest re-branding Microsoft Edge WebView2
+    run_wine wine "$SELECTED_DIRECTORY/downloads/WebView2installer.exe" /silent /install \
+        >> "$SELECTED_DIRECTORY/logs/WebView2_install.log" 2>&1
+    echo -e "$(gettext "${GREEN}WebView2 installation completed.${NOCOLOR}")"
+
     APPDATA_DIRECTORY="$WINE_PFX/drive_c/users/$USER/AppData"
     APPLICATION_DATA_DIRECTORY="$WINE_PFX/drive_c/users/$USER/Application Data"
+
     mkdir -p "$APPDATA_DIRECTORY/Roaming/Microsoft/Internet Explorer/Quick Launch/User Pinned"
 
-    if [[ $GPU_DRIVER = "DXVK" ]]; then
-        WINEPREFIX="$WINE_PFX" sh "$SELECTED_DIRECTORY/bin/winetricks" -q dxvk
-        # Add the "return"-option. Here you can read more about it -> https://github.com/koalaman/shellcheck/issues/592
-        WINEPREFIX="$WINE_PFX" wine regedit.exe "C:\\users\\$USER\\Downloads\\DXVK\\DXVK.reg"
+    if [[ "$GPU_DRIVER" == "DXVK" ]]; then
+        echo -e "$(gettext "${YELLOW}Installing DXVK...${NOCOLOR}")"
+        run_wine sh "$SELECTED_DIRECTORY/bin/winetricks" -q dxvk
+
     fi
+
     autodesk_fusion_run_install_client
+
+    APPDATA_DIRECTORY="$WINE_PFX/drive_c/users/$USER/AppData"
+    APPLICATION_DATA_DIRECTORY="$WINE_PFX/drive_c/users/$USER/Application Data"
+
     mkdir -p "$APPDATA_DIRECTORY/Roaming/Autodesk/Neutron Platform/Options"
     mkdir -p "$APPDATA_DIRECTORY/Local/Autodesk/Neutron Platform/Options"
     mkdir -p "$APPLICATION_DATA_DIRECTORY/Autodesk/Neutron Platform/Options"
-    cp "$SELECTED_DIRECTORY/downloads/$GPU_DRIVER/NMachineSpecificOptions.xml" "$APPDATA_DIRECTORY/Roaming/Autodesk/Neutron Platform/Options/NMachineSpecificOptions.xml" || return
-    cp "$SELECTED_DIRECTORY/downloads/$GPU_DRIVER/NMachineSpecificOptions.xml" "$APPDATA_DIRECTORY/Local/Autodesk/Neutron Platform/Options/NMachineSpecificOptions.xml" || return
-    cp "$SELECTED_DIRECTORY/downloads/$GPU_DRIVER/NMachineSpecificOptions.xml" "$APPLICATION_DATA_DIRECTORY/Autodesk/Neutron Platform/Options/NMachineSpecificOptions.xml" || return
+
+    XML_SOURCE="$SELECTED_DIRECTORY/downloads/$GPU_DRIVER/NMachineSpecificOptions.xml"
+
+    if [ -f "$XML_SOURCE" ]; then
+        cp "$XML_SOURCE" \
+            "$APPDATA_DIRECTORY/Roaming/Autodesk/Neutron Platform/Options/NMachineSpecificOptions.xml"
+
+        cp "$XML_SOURCE" \
+            "$APPDATA_DIRECTORY/Local/Autodesk/Neutron Platform/Options/NMachineSpecificOptions.xml"
+
+        cp "$XML_SOURCE" \
+            "$APPLICATION_DATA_DIRECTORY/Autodesk/Neutron Platform/Options/NMachineSpecificOptions.xml"
+    else
+        echo -e "${YELLOW}Warning: NMachineSpecificOptions.xml not found for $GPU_DRIVER — skipping GPU config.${NOCOLOR}"
+    fi
 }
 
 ###############################################################################################################################################################
@@ -1252,9 +1056,9 @@ run_install_extension_client() {
     local EXTENSION_FILE="$1"
     local WIN_EXTENSION_DIRECTORY="C:\\users\\$USER\\Downloads\\extensions"
     if [[ "$EXTENSION_FILE" == *.msi ]]; then
-        WINEPREFIX="$WINE_PFX" wine msiexec /i "$WIN_EXTENSION_DIRECTORY\\$EXTENSION_FILE" /quiet
+        run_wine wine msiexec /i "$WIN_EXTENSION_DIRECTORY\\$EXTENSION_FILE" /quiet
     else
-        WINEPREFIX="$WINE_PFX" wine "$SELECTED_DIRECTORY/downloads/$EXTENSION_FILE"
+        run_wine wine "$SELECTED_DIRECTORY/downloads/$EXTENSION_FILE"
     fi
 }
 

@@ -287,6 +287,17 @@ And would you like to use <a href="https://apps.autodesk.com/FUSION/de/Home/Inde
 
 ## Getting Started
 
+## Requirements
+
+You must install Wine manually before running the installer.
+
+### Ubuntu / PopOS
+sudo dpkg --add-architecture i386
+sudo apt update
+sudo apt install wine64 wine32 -y
+
+Recommended Wine version: 9.x or newer (non-staging)
+
 - Check my <a href="https://codeberg.org/cryinkfly/Autodesk-Fusion-360-on-Linux/wiki/Documentation">GitHub-Documentation</a> & <a href="https://www.youtube.com/watch?v=-BktJspJKgs&list=PLzwMdS5iu_BIsO6RTy7Hy1MbzLMrQE2xe">Videos</a> before you install Autodesk Fusion 360 on your system!
 - Check, if your <a href="https://codeberg.org/cryinkfly/Autodesk-Fusion-360-on-Linux/src/branch/main/files/extras/network/etc">network settings</a> are correctly configured!
 - Check, if your system meets all requirements</a>!
