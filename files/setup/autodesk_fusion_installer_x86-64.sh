@@ -147,7 +147,7 @@ check_required_packages() {
                     ;;
 
                 mokutil)
-                    if ! mokutil --list-enrolled &>/dev/null; then
+                    if ! command -v mokutil >/dev/null 2>&1; then
                         echo -e "${RED}The required command (${cmd}) is not available!${NOCOLOR}"
                         MISSING_COMMANDS+=("$cmd")
                     else
@@ -276,27 +276,20 @@ install_required_packages() {
 # DOWNLOAD THE TRANSLATIONS FOR THE INSTALLER:                                                                                                                              #
 ##############################################################################################################################################################################
 
-# <-- Still in progress!!!
 download_translations() {
-    curl -o "./locale/update-locale.sh" "$UPDATER_TRANSLATIONS_URL"
-    chmod +x "./locale/update-locale.sh"
+    mkdir -p ./locale
 
-    # Curl the translations for the installer
-    for locale in "${!TRANSLATION_URLS[@]}"; do
-        local TRANSLATION_FILE_URL="${TRANSLATION_URLS[$locale]}"
-        local TRANSLATION_FILE_DIRECTORY="./locale/$locale/LC_MESSAGES/autodesk_fusion.po"
-        
-        mkdir -p "$(dirname "$TRANSLATION_FILE_DIRECTORY")"
-        curl -L "$TRANSLATION_FILE_URL" -o "$TRANSLATION_FILE_DIRECTORY"
-    done
+    # Stub locale updater (prevents crash)
+    cat > ./locale/update-locale.sh <<'EOF'
+#!/usr/bin/env bash
+return 0
+EOF
 
-    source "./locale/update-locale.sh"
+    chmod +x ./locale/update-locale.sh
 
-    # SET THE TEXTDOMAIN FOR THE INSTALLER:
     TEXTDOMAIN="autodesk_fusion"
     TEXTDOMAINDIR="./locale"
 
-    # Load translations
     export TEXTDOMAIN
     export TEXTDOMAINDIR
 }
@@ -660,48 +653,35 @@ is_snap_firefox_installed() {
 }
 
 check_install_firefox_deb() {
-    # Function to check if Firefox is installed via Snap
-    is_snap_firefox_installed {
+    is_snap_firefox_installed() {
         snap list firefox &> /dev/null
         return $?
     }
 
-    # Check if Firefox is installed via Snap
     if is_snap_firefox_installed; then
         echo "The installed version of Firefox is from Snap."
-        echo "It is recommended to install the DEB version for better performance and compatibility."
 
-        # Prompt user for action
-        read -p "Do you want to uninstall the Snap version of Firefox and install the DEB version? (y/n): " choice
+        read -p "Replace with DEB version? (y/n): " choice
 
         if [[ "$choice" =~ ^[Yy]$ ]]; then
-            echo "Proceeding with the uninstallation of the Snap version and installation of the DEB version..."
-
-            # Uninstall Firefox Snap
             sudo snap remove -y firefox
-
-            # Create an APT keyring directory if it doesn't exist
             sudo install -d -m 0755 /etc/apt/keyrings
 
-            # Import the Mozilla APT repo signing key
-            wget -q https://packages.mozilla.org/apt/repo-signing-key.gpg -O- | sudo tee /etc/apt/keyrings/packages.mozilla.org.asc > /dev/null
+            wget -q https://packages.mozilla.org/apt/repo-signing-key.gpg -O- \
+                | sudo tee /etc/apt/keyrings/packages.mozilla.org.asc > /dev/null
 
-            # Add Mozilla APT repo to sources.list
-            echo "deb [signed-by=/etc/apt/keyrings/packages.mozilla.org.asc] https://packages.mozilla.org/apt mozilla main" | sudo tee /etc/apt/sources.list.d/mozilla.list > /dev/null
+            echo "deb [signed-by=/etc/apt/keyrings/packages.mozilla.org.asc] https://packages.mozilla.org/apt mozilla main" \
+                | sudo tee /etc/apt/sources.list.d/mozilla.list > /dev/null
 
-            # Set package priority to ensure DEB version is default
             echo '
 Package: *
 Pin: origin packages.mozilla.org
 Pin-Priority: 1000
 ' | sudo tee /etc/apt/preferences.d/mozilla
 
-            # Update and install Firefox DEB version
             sudo apt update && sudo apt install -y firefox
-
-            echo "Firefox DEB version installed successfully."
         else
-            echo "No changes made. Firefox Snap version remains installed."
+            echo "Skipping Firefox replacement."
         fi
     else
         echo "The installed version of Firefox is not from Snap."
